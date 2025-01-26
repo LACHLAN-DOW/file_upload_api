@@ -1,12 +1,16 @@
-const express = require("express");
-const multer = require("multer");
-const csv_parser = require("csv-parser");
-const app = express();
-const fs = require("fs");
-const rateLimit = require('express-rate-limit');
+import express from "express";
+import multer from "multer";
+import csv_parser from "csv-parser"; 
+import fs from "fs";
+import rateLimit from "express-rate-limit";
+import { v4 as uuidv4 } from "uuid";
+import pLimit from "p-limit";
+
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
-const { v4: uuidv4 } = require("uuid");
+const app = express();
+
+const limit = pLimit(5);
 
 const uploadLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
@@ -19,7 +23,7 @@ app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
 
-app.post("/upload", upload.single("file"), (req, res) => {
+app.post("/upload", uploadLimiter, upload.single("file"), (req, res) => {
   if (!req.file) {
     return res.status(400).send("No File Found");
   }
@@ -56,7 +60,8 @@ app.post("/upload", upload.single("file"), (req, res) => {
     .pipe(csv_parser())
     .on("data", (data) => {
       totalRecords++;
-      const validatePromise = mockValidateEmail(data.email).then(
+      const validatePromise = limit(() =>{
+        mockValidateEmail(data.email).then(
         (validation) => {
           if (!validation.valid) {
             results.push({
@@ -81,6 +86,7 @@ app.post("/upload", upload.single("file"), (req, res) => {
           (validatePromises.length / totalRecords) * 100
         );
         taskStatusMap.set(uploadId, { status: "processing", progress });
+      });
       });
       validatePromises.push(validatePromise);
     })
