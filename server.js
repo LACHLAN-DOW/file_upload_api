@@ -3,12 +3,16 @@ const multer = require("multer");
 const csv_parser = require("csv-parser");
 const app = express();
 const fs = require("fs");
-//const pLimit = require('p-limit');
+const rateLimit = require('express-rate-limit');
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
-const { v4: uuidv4 } = require("uuid"); // For generating unique upload IDs
+const { v4: uuidv4 } = require("uuid");
 
-//const limit = pLimit(5);
+const uploadLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // limit each IP to 10 requests per minute
+  message: "You have made too many uploads, please try again in a minute.",
+});
 
 const taskStatusMap = new Map();
 app.listen(port, () => {
