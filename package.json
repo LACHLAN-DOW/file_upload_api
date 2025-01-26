@@ -18,6 +18,8 @@
   },
   "homepage": "https://github.com/LACHLAN-DOW/file_upload_api#readme",
   "dependencies": {
-    "express": "^4.21.2"
+    "csv-parser": "^3.1.0",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
   }
 }
