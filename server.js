@@ -96,10 +96,12 @@ const processCSV = (uploadId, file) =>{
   const validatePromises = [];
   let totalRecords = 0;
   let processedRecords = 0;
+  const stream = fs.createReadStream(file.path).pipe(csv_parser());
 
-  fs.createReadStream(file.path)
-    .pipe(csv_parser())
-    .on("data", (data) => {
+    stream.on("data", (data) => {
+      if (limit.activeCount >= 5) {
+        stream.pause();
+      }
       totalRecords++;
       const validatePromise = limit(() =>
         mockValidateEmail(data.email)
@@ -121,7 +123,11 @@ const processCSV = (uploadId, file) =>{
             });
             updateProgess(uploadId,++processedRecords,totalRecords);
           })
-      );
+      ).finally(()=>{
+        if (limit.activeCount < 5) {
+          stream.resume();
+        }
+      });
       validatePromises.push(validatePromise);
     })
     .on("end", async () => {
