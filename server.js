@@ -6,19 +6,30 @@ import fs from "fs";
 import rateLimit from "express-rate-limit";
 import { v4 as uuidv4 } from "uuid";
 import pLimit from "p-limit";
+import winston from "winston";
 
 
 //constants
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
 const app = express();
-const limit = pLimit(5);
+const CON_CONCURRENCY_LIMIT = 5
+const limit = pLimit(CON_CONCURRENCY_LIMIT);
 const taskStatusMap = new Map();
 const uploadLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
   max: 10, // limit each IP to 10 requests per minute
   message: "You have made too many uploads, please try again in a minute.",
 });
+
+const logger = winston.createLogger({
+  level: "info",
+  format: winston.format.json(),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: "email_validation_api.log" }),
+  ],
+})
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
@@ -33,7 +44,7 @@ app.post("/upload", uploadLimiter, upload.single("file"), (req, res) => {
 
   const fileTypeError = fileTypeValidation(req.file);
   if(fileTypeError){
-    fs.unlink(req.file.path, () => {}); // Delete the uploaded file
+    fs.unlink(req.file.path, () => {});
     return res
     .status(400)
     .send("Invalid file extension. Only CSV files are allowed.");
@@ -96,11 +107,14 @@ const processCSV = (uploadId, file) =>{
   const validatePromises = [];
   let totalRecords = 0;
   let processedRecords = 0;
+  const stream = fs.createReadStream(file.path).pipe(csv_parser());
 
-  fs.createReadStream(file.path)
-    .pipe(csv_parser())
-    .on("data", (data) => {
+    stream.on("data", (data) => {
+      if (limit.activeCount >= CON_CONCURRENCY_LIMIT) {
+        stream.pause();
+      }
       totalRecords++;
+      logger.info(`Begin Email Validation: ${data.email}`, { uploadId, email: data.email });
       const validatePromise = limit(() =>
         mockValidateEmail(data.email)
         .then((validation) => {
@@ -110,23 +124,43 @@ const processCSV = (uploadId, file) =>{
               email: data.email,
               error: "Invaid Email Format",
             });
+            logger.warn(`Failed Email Validation: ${data.email}`, { uploadId, email: data.email });
+
+          }else{
+            logger.info(`Successful Email Validation: ${data.email}`, { uploadId, email: data.email });
+
           }
           updateProgess(uploadId,++processedRecords,totalRecords);
           })
           .catch((error) => {
+            const errorMessage = "Validation service timed out";
             results.push({
               name: data.name,
               email: data.email,
-              error: "Validation service timed out",
+              error: errorMessage,
+            });
+            logger.error(`Error for ${data.email}: ${error.message}`, {
+              uploadId,
+              email: data.email,
+              error: errorMessage,
             });
             updateProgess(uploadId,++processedRecords,totalRecords);
           })
-      );
+      ).finally(()=>{
+        if (limit.activeCount < CON_CONCURRENCY_LIMIT) {
+          stream.resume();
+        }
+      });
       validatePromises.push(validatePromise);
     })
     .on("end", async () => {
       await Promise.all(validatePromises);
       fs.unlink(file.path, () => {});
+      logger.info(`Processing completed: ${uploadId}`, {
+        uploadId,
+        totalRecords,
+        invalidEmails: results.length,
+      });
       createSummary( uploadId,totalRecords,results)
     });
 }

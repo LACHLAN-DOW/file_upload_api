@@ -129,6 +129,8 @@ describe("processCSV", () => {
     readStream = sinon.stub(fs, "createReadStream").returns({
       pipe: pipeStub,
       on: onStub,
+      pause: sinon.stub(),
+      resume: sinon.stub(),
     });
 
     unlinkStub = sinon.stub(fs, "unlink").callsFake((path, cb) => cb());
