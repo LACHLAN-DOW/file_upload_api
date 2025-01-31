@@ -1,4 +1,9 @@
 import { expect } from "chai";
+import sinon from "sinon";
+import fs from "fs";
+import csv_parser from "csv-parser";
+import pLimit from "p-limit";
+import { largeData } from "./largerDataFile.js";
 
 import {
   fileTypeValidation,
@@ -7,7 +12,7 @@ import {
   mockValidateEmail,
   processCSV,
   taskStatusMap,
-} from "../server.js"; 
+} from "../server.js";
 
 describe("Validate File Type", () => {
   it("should return false for a valid CSV file", () => {
@@ -78,11 +83,13 @@ describe("createSummary", () => {
   it("should set the correct summary in taskStatusMap", () => {
     const uploadId = "sufhgdlifgndfgpijdrg";
     const totalRecords = 200;
-    const results = [{
-        "name": "Test Name",
-        "email": "invalid-email",
-        "error": "Invaid Email Format"
-    }];
+    const results = [
+      {
+        name: "Test Name",
+        email: "invalid-email",
+        error: "Invaid Email Format",
+      },
+    ];
 
     createSummary(uploadId, totalRecords, results);
     const statusEntry = taskStatusMap.get(uploadId);
@@ -107,3 +114,169 @@ describe("mockValidateEmail", () => {
   });
 });
 
+describe("processCSV", () => {
+  let readStream;
+  let pipeStub;
+  let onStub;
+  let unlinkStub;
+
+  beforeEach(() => {
+    pipeStub = sinon.stub().returnsThis();
+    onStub = sinon.stub().callsFake(function (event, callback) {
+        return this;
+    });
+
+    readStream = sinon.stub(fs, "createReadStream").returns({
+      pipe: pipeStub,
+      on: onStub,
+    });
+
+    unlinkStub = sinon.stub(fs, "unlink").callsFake((path, cb) => cb());
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    taskStatusMap.clear();
+  });
+
+  it("should process CSV data for mixed results, update progress and create the correct summary", async () => {
+    const uploadId = "k89345iuherdgy";
+    const fakeFile = { path: "file.csv" };
+
+    const rowData = [
+      { name: "John Doe", email: "john@working.com" },
+      { name: "Jane Doe", email: "janebroken.com" }, 
+    ];
+
+    const onCallMap = {};
+
+    onStub.callsFake(function (event, callback) {
+      onCallMap[event] = callback;
+      return this;
+    });
+
+    processCSV(uploadId, fakeFile);
+
+    rowData.forEach((row) => {
+      onCallMap["data"](row);
+    });
+
+    await onCallMap["end"]();
+
+    expect(readStream.calledOnceWithExactly(fakeFile.path)).to.be.true;
+
+    const statusEntry = taskStatusMap.get(uploadId);
+    expect(statusEntry.status).to.equal("completed");
+    expect(statusEntry.progress).to.equal(100);
+    expect(statusEntry.summary.totalRecords).to.equal(2);
+    expect(statusEntry.summary.failedRecords).to.equal(1);
+    expect(statusEntry.summary.processedRecords).to.equal(1);
+
+    expect(unlinkStub.calledOnceWithExactly(fakeFile.path, sinon.match.func)).to.be.true;
+  });
+
+  it("should process CSV data for all passing, update progress and create the correct summary", async () => {
+    const uploadId = "sfgdfg";
+    const fakeFile = { path: "file.csv" };
+
+    const rowData = [
+      { name: "John Doe", email: "john@working.com" },
+      { name: "Jane Doe", email: "jane@alsoworking.com" }, 
+    ];
+
+    const onCallMap = {};
+
+    onStub.callsFake(function (event, callback) {
+      onCallMap[event] = callback;
+      return this;
+    });
+
+    processCSV(uploadId, fakeFile);
+
+    rowData.forEach((row) => {
+      onCallMap["data"](row);
+    });
+
+    await onCallMap["end"]();
+
+    expect(readStream.calledOnceWithExactly(fakeFile.path)).to.be.true;
+
+    const statusEntry = taskStatusMap.get(uploadId);
+    expect(statusEntry.status).to.equal("completed");
+    expect(statusEntry.progress).to.equal(100);
+    expect(statusEntry.summary.totalRecords).to.equal(2);
+    expect(statusEntry.summary.failedRecords).to.equal(0);
+    expect(statusEntry.summary.processedRecords).to.equal(2);
+
+    expect(unlinkStub.calledOnceWithExactly(fakeFile.path, sinon.match.func)).to.be.true;
+  });
+
+  it("should process CSV data for all failing, update progress and create the correct summary", async () => {
+    const uploadId = "sfgdfg";
+    const fakeFile = { path: "file.csv" };
+
+    const rowData = [
+      { name: "John Doe", email: "johnnotworking.com" },
+      { name: "Jane Doe", email: "janealsonotworking.com" }, 
+    ];
+
+    const onCallMap = {};
+
+    onStub.callsFake(function (event, callback) {
+      onCallMap[event] = callback;
+      return this;
+    });
+
+    processCSV(uploadId, fakeFile);
+
+    rowData.forEach((row) => {
+      onCallMap["data"](row);
+    });
+
+    await onCallMap["end"]();
+
+    expect(readStream.calledOnceWithExactly(fakeFile.path)).to.be.true;
+
+    const statusEntry = taskStatusMap.get(uploadId);
+    expect(statusEntry.status).to.equal("completed");
+    expect(statusEntry.progress).to.equal(100);
+    expect(statusEntry.summary.totalRecords).to.equal(2);
+    expect(statusEntry.summary.failedRecords).to.equal(2);
+    expect(statusEntry.summary.processedRecords).to.equal(0);
+
+    expect(unlinkStub.calledOnceWithExactly(fakeFile.path, sinon.match.func)).to.be.true;
+  });
+
+  it("should process CSV data for all larger file, update progress and create the correct summary", async () => {
+    const uploadId = "sfgdfg";
+    const fakeFile = { path: "file.csv" };
+
+    const rowData = largeData;
+
+    const onCallMap = {};
+
+    onStub.callsFake(function (event, callback) {
+      onCallMap[event] = callback;
+      return this;
+    });
+
+    processCSV(uploadId, fakeFile);
+
+    rowData.forEach((row) => {
+      onCallMap["data"](row);
+    });
+
+    await onCallMap["end"]();
+
+    expect(readStream.calledOnceWithExactly(fakeFile.path)).to.be.true;
+
+    const statusEntry = taskStatusMap.get(uploadId);
+    expect(statusEntry.status).to.equal("completed");
+    expect(statusEntry.progress).to.equal(100);
+    expect(statusEntry.summary.totalRecords).to.equal(49);
+    expect(statusEntry.summary.failedRecords).to.equal(24);
+    expect(statusEntry.summary.processedRecords).to.equal(25);
+
+    expect(unlinkStub.calledOnceWithExactly(fakeFile.path, sinon.match.func)).to.be.true;
+  });
+});
